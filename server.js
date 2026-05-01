@@ -15,16 +15,40 @@ const { startTimeCapsuleScheduler } = require('./utils/timeCapsuleScheduler');
 const app = express();
 const server = http.createServer(app);
 
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
+const isAllowedOrigin = (origin) => {
+  // Allow same-origin/server-to-server tools that do not send an Origin header.
+  if (!origin) return true;
+  return allowedOrigins.includes(origin);
+};
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'));
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
 // Socket.IO with CORS
 const io = new Server(server, {
   cors: {
-    origin: '*', // In production: restrict to your domain
+    origin(origin, callback) {
+      if (isAllowedOrigin(origin)) return callback(null, true);
+      return callback(new Error('Not allowed by CORS'));
+    },
     methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   },
 });
 
 // ── MIDDLEWARE ────────────────────────────────────────────────────────────────
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 

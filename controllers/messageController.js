@@ -3,13 +3,23 @@
 
 const Message = require('../models/Message');
 const Conversation = require('../models/Conversation');
-const User = require('../models/User');
+const mongoose = require('mongoose');
+
+const VALID_MESSAGE_TYPES = new Set(['standard', 'timeCapsule', 'silent']);
+const VALID_PRIORITIES = new Set(['normal', 'urgent']);
+const MAX_MESSAGE_LENGTH = 2000;
+
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 // ── GET MESSAGES ──────────────────────────────────────────────────────────────
 exports.getMessages = async (req, res) => {
   try {
     const { conversationId } = req.params;
     const { page = 1, limit = 50 } = req.query;
+
+    if (!isValidObjectId(conversationId)) {
+      return res.status(400).json({ success: false, message: 'Invalid conversation id' });
+    }
 
     // Confirm user is a participant
     const conversation = await Conversation.findOne({
@@ -51,8 +61,24 @@ exports.sendMessage = async (req, res) => {
       autoDelete,      // For silent mode
     } = req.body;
 
-    if (!content || !content.trim()) {
+    if (!isValidObjectId(conversationId)) {
+      return res.status(400).json({ success: false, message: 'Invalid conversation id' });
+    }
+
+    if (typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ success: false, message: 'Message content required' });
+    }
+
+    if (content.trim().length > MAX_MESSAGE_LENGTH) {
+      return res.status(400).json({ success: false, message: 'Message too long' });
+    }
+
+    if (!VALID_MESSAGE_TYPES.has(messageType)) {
+      return res.status(400).json({ success: false, message: 'Invalid message type' });
+    }
+
+    if (!VALID_PRIORITIES.has(priority)) {
+      return res.status(400).json({ success: false, message: 'Invalid message priority' });
     }
 
     // Verify access
@@ -68,7 +94,7 @@ exports.sendMessage = async (req, res) => {
     // ── Build message based on type ──────────────────────────────────────────
     const messageData = {
       sender: req.user._id,
-      conversation: conversationId,
+      conversation: conversation._id,
       content: content.trim(),
       messageType,
       priority,
@@ -80,6 +106,9 @@ exports.sendMessage = async (req, res) => {
         return res.status(400).json({ success: false, message: 'Unlock time required for time capsule' });
       }
       const unlockDate = new Date(unlockAt);
+      if (Number.isNaN(unlockDate.getTime())) {
+        return res.status(400).json({ success: false, message: 'Invalid unlock time' });
+      }
       if (unlockDate <= new Date()) {
         return res.status(400).json({ success: false, message: 'Unlock time must be in the future' });
       }
@@ -133,9 +162,23 @@ exports.sendMessage = async (req, res) => {
 exports.markAsRead = async (req, res) => {
   try {
     const { messageId } = req.params;
-    const message = await Message.findById(messageId);
+
+    if (!isValidObjectId(messageId)) {
+      return res.status(400).json({ success: false, message: 'Invalid message id' });
+    }
+
+    const message = await Message.findOne({ _id: messageId, isDeleted: false });
 
     if (!message) return res.status(404).json({ success: false, message: 'Message not found' });
+
+    const hasAccess = await Conversation.exists({
+      _id: message.conversation,
+      participants: req.user._id,
+    });
+
+    if (!hasAccess) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
 
     // Add to readBy if not already there
     const alreadyRead = message.readBy.some(r => r.user.toString() === req.user._id.toString());
